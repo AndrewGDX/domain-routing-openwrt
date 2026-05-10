@@ -2,9 +2,85 @@
 
 #set -x
 
+set_package_manager() {
+    if [ "$VERSION_ID" -ge 25 ]; then
+        if command -v apk >/dev/null 2>&1; then
+            PKG_MANAGER=apk
+        else
+            printf "\033[31;1mOpenWrt $VERSION uses apk, but apk was not found\033[0m\n"
+            exit 1
+        fi
+    elif command -v opkg >/dev/null 2>&1; then
+        PKG_MANAGER=opkg
+    else
+        printf "\033[31;1mPackage manager not found. Expected opkg for OpenWrt 23/24 or apk for OpenWrt 25\033[0m\n"
+        exit 1
+    fi
+}
+
+pkg_is_installed() {
+    package=$1
+    if [ "$PKG_MANAGER" = apk ]; then
+        apk info -e "$package" >/dev/null 2>&1 || apk list -I "$package" 2>/dev/null | grep -q "^$package-"
+    else
+        opkg list-installed "$package" 2>/dev/null | grep -q "^$package "
+    fi
+}
+
+pkg_install() {
+    if [ "$PKG_MANAGER" = apk ]; then
+        apk add "$@" || {
+            printf "\033[31;1mError installing package(s): $*\033[0m\n"
+            exit 1
+        }
+    else
+        opkg install "$@" || {
+            printf "\033[31;1mError installing package(s): $*\033[0m\n"
+            exit 1
+        }
+    fi
+}
+
+pkg_remove() {
+    if [ "$PKG_MANAGER" = apk ]; then
+        apk del "$@"
+    else
+        opkg remove "$@"
+    fi
+}
+
+pkg_install_local() {
+    package_path=$1
+    if [ "$PKG_MANAGER" = apk ]; then
+        apk add --allow-untrusted "$package_path"
+    else
+        opkg install "$package_path"
+    fi
+}
+
+pkg_arch() {
+    if [ "$PKG_MANAGER" = apk ]; then
+        arch=$(awk -F/ '/\/packages\/[^\/]+\/(base|luci|packages|routing|telephony|video)\/packages\.adb/ { print $(NF-2); exit }' /etc/apk/repositories.d/*.list 2>/dev/null)
+        if [ -n "$arch" ]; then
+            echo "$arch"
+        else
+            apk --print-arch
+        fi
+    else
+        opkg print-architecture | awk 'BEGIN {max=0} {if ($3 > max) {max = $3; arch = $2}} END {print arch}'
+    fi
+}
+
 check_repo() {
     printf "\033[32;1mChecking OpenWrt repo availability...\033[0m\n"
-    opkg update | grep -q "Failed to download" && printf "\033[32;1mopkg failed. Check internet or date. Command for force ntp sync: ntpd -p ptbtime1.ptb.de\033[0m\n" && exit 1
+    if [ "$PKG_MANAGER" = apk ]; then
+        apk update || {
+            printf "\033[31;1mapk failed. Check internet or date. Command for force ntp sync: ntpd -p ptbtime1.ptb.de\033[0m\n"
+            exit 1
+        }
+    else
+        opkg update | grep -q "Failed to download" && printf "\033[31;1mopkg failed. Check internet or date. Command for force ntp sync: ntpd -p ptbtime1.ptb.de\033[0m\n" && exit 1
+    fi
 }
 
 route_vpn () {
@@ -111,11 +187,11 @@ add_tunnel() {
 
     if [ "$TUNNEL" == 'wg' ]; then
         printf "\033[32;1mConfigure WireGuard\033[0m\n"
-        if opkg list-installed | grep -q wireguard-tools; then
+        if pkg_is_installed wireguard-tools; then
             echo "Wireguard already installed"
         else
             echo "Installed wg..."
-            opkg install wireguard-tools
+            pkg_install wireguard-tools
         fi
 
         route_vpn
@@ -163,24 +239,24 @@ add_tunnel() {
     fi
 
     if [ "$TUNNEL" == 'ovpn' ]; then
-        if opkg list-installed | grep -q openvpn-openssl; then
+        if pkg_is_installed openvpn-openssl; then
             echo "OpenVPN already installed"
         else
             echo "Installed openvpn"
-            opkg install openvpn-openssl
+            pkg_install openvpn-openssl
         fi
         printf "\033[32;1mConfigure route for OpenVPN\033[0m\n"
         route_vpn
     fi
 
     if [ "$TUNNEL" == 'singbox' ]; then
-        if opkg list-installed | grep -q sing-box; then
+        if pkg_is_installed sing-box; then
             echo "Sing-box already installed"
         else
             AVAILABLE_SPACE=$(df / | awk 'NR>1 { print $4 }')
             if  [[ "$AVAILABLE_SPACE" -gt 2000 ]]; then
                 echo "Installed sing-box"
-                opkg install sing-box
+                pkg_install sing-box
             else
                 printf "\033[31;1mNo free space for a sing-box. Sing-box is not installed.\033[0m\n"
                 exit 1
@@ -315,12 +391,21 @@ EOF
 }
 
 dnsmasqfull() {
-    if opkg list-installed | grep -q dnsmasq-full; then
+    if pkg_is_installed dnsmasq-full; then
         printf "\033[32;1mdnsmasq-full already installed\033[0m\n"
     else
         printf "\033[32;1mInstalled dnsmasq-full\033[0m\n"
-        cd /tmp/ && opkg download dnsmasq-full
-        opkg remove dnsmasq && opkg install dnsmasq-full --cache /tmp/
+        if [ "$PKG_MANAGER" = apk ]; then
+            apk --update-cache add dnsmasq-full || {
+                printf "\033[31;1mError installing dnsmasq-full\033[0m\n"
+                exit 1
+            }
+        else
+            cd /tmp/ && opkg download dnsmasq-full && opkg remove dnsmasq && opkg install dnsmasq-full --cache /tmp/ || {
+                printf "\033[31;1mError installing dnsmasq-full\033[0m\n"
+                exit 1
+            }
+        fi
 
         [ -f /etc/config/dhcp-opkg ] && cp /etc/config/dhcp /etc/config/dhcp-old && mv /etc/config/dhcp-opkg /etc/config/dhcp
     fi
@@ -521,11 +606,11 @@ add_dns_resolver() {
     done
 
     if [ "$DNS_RESOLVER" == 'DNSCRYPT' ]; then
-        if opkg list-installed | grep -q dnscrypt-proxy2; then
+        if pkg_is_installed dnscrypt-proxy2; then
             printf "\033[32;1mDNSCrypt2 already installed\033[0m\n"
         else
             printf "\033[32;1mInstalled dnscrypt-proxy2\033[0m\n"
-            opkg install dnscrypt-proxy2
+            pkg_install dnscrypt-proxy2
             if grep -q "# server_names" /etc/dnscrypt-proxy2/dnscrypt-proxy.toml; then
                 sed -i "s/^# server_names =.*/server_names = [\'google\', \'cloudflare\', \'scaleway-fr\', \'yandex\']/g" /etc/dnscrypt-proxy2/dnscrypt-proxy.toml
             fi
@@ -555,11 +640,11 @@ add_dns_resolver() {
     if [ "$DNS_RESOLVER" == 'STUBBY' ]; then
         printf "\033[32;1mConfigure Stubby\033[0m\n"
 
-        if opkg list-installed | grep -q stubby; then
+        if pkg_is_installed stubby; then
             printf "\033[32;1mStubby already installed\033[0m\n"
         else
             printf "\033[32;1mInstalled stubby\033[0m\n"
-            opkg install stubby
+            pkg_install stubby
 
             printf "\033[32;1mConfigure Dnsmasq for Stubby\033[0m\n"
             uci set dhcp.@dnsmasq[0].noresolv="1"
@@ -577,11 +662,11 @@ add_dns_resolver() {
 
 add_packages() {
     for package in curl nano; do
-        if opkg list-installed | grep -q "^$package "; then
+        if pkg_is_installed "$package"; then
             printf "\033[32;1m$package already installed\033[0m\n"
         else
             printf "\033[32;1mInstalling $package...\033[0m\n"
-            opkg install "$package"
+            pkg_install "$package"
             
             if "$package" --version >/dev/null 2>&1; then
                 printf "\033[32;1m$package was successfully installed and available\033[0m\n"
@@ -653,6 +738,7 @@ start () {
 EOF
 cat << 'EOF' >> /etc/init.d/getdomains
     count=0
+    mkdir -p /tmp/dnsmasq.d
     while true; do
         if curl -m 3 github.com; then
             curl -f $DOMAINS --output /tmp/dnsmasq.d/domains.lst
@@ -696,11 +782,11 @@ add_internal_wg() {
         PROTO="wireguard"
         ZONE_NAME="wg_internal"
 
-        if opkg list-installed | grep -q wireguard-tools; then
+        if pkg_is_installed wireguard-tools; then
             echo "Wireguard already installed"
         else
             echo "Installed wg..."
-            opkg install wireguard-tools
+            pkg_install wireguard-tools
         fi
     fi
 
@@ -877,88 +963,62 @@ add_internal_wg() {
 }
 
 install_awg_packages() {
-    # Получение pkgarch с наибольшим приоритетом
-    PKGARCH=$(opkg print-architecture | awk 'BEGIN {max=0} {if ($3 > max) {max = $3; arch = $2}} END {print arch}')
-
+    PKGARCH=$(pkg_arch)
     TARGET=$(ubus call system board | jsonfilter -e '@.release.target' | cut -d '/' -f 1)
     SUBTARGET=$(ubus call system board | jsonfilter -e '@.release.target' | cut -d '/' -f 2)
     VERSION=$(ubus call system board | jsonfilter -e '@.release.version')
-    PKGPOSTFIX="_v${VERSION}_${PKGARCH}_${TARGET}_${SUBTARGET}.ipk"
+    if [ -z "$PKGARCH" ] || [ -z "$TARGET" ] || [ -z "$SUBTARGET" ] || [ -z "$VERSION" ]; then
+        echo "Error detecting OpenWrt platform for AmneziaWG packages"
+        exit 1
+    fi
+    if [ "$PKG_MANAGER" = apk ]; then
+        PKGEXT=apk
+    else
+        PKGEXT=ipk
+    fi
+    PKGPOSTFIX="_v${VERSION}_${PKGARCH}_${TARGET}_${SUBTARGET}.${PKGEXT}"
     BASE_URL="https://github.com/Slava-Shchipunov/awg-openwrt/releases/download/"
 
     AWG_DIR="/tmp/amneziawg"
     mkdir -p "$AWG_DIR"
 
-    if opkg list-installed | grep -q amneziawg-tools; then
-        echo "amneziawg-tools already installed"
-    else
-        AMNEZIAWG_TOOLS_FILENAME="amneziawg-tools${PKGPOSTFIX}"
-        DOWNLOAD_URL="${BASE_URL}v${VERSION}/${AMNEZIAWG_TOOLS_FILENAME}"
-        curl -L -o "$AWG_DIR/$AMNEZIAWG_TOOLS_FILENAME" "$DOWNLOAD_URL"
+    install_awg_package() {
+        package=$1
+        PACKAGE_FILENAME="${package}${PKGPOSTFIX}"
+        DOWNLOAD_URL="${BASE_URL}v${VERSION}/${PACKAGE_FILENAME}"
+        curl -fsSL -o "$AWG_DIR/$PACKAGE_FILENAME" "$DOWNLOAD_URL"
 
-        if [ $? -eq 0 ]; then
-            echo "amneziawg-tools file downloaded successfully"
-        else
-            echo "Error downloading amneziawg-tools. Please, install amneziawg-tools manually and run the script again"
-            exit 1
+        if [ $? -ne 0 ]; then
+            return 1
         fi
 
-        opkg install "$AWG_DIR/$AMNEZIAWG_TOOLS_FILENAME"
+        echo "$package file downloaded successfully"
 
-        if [ $? -eq 0 ]; then
-            echo "amneziawg-tools file downloaded successfully"
-        else
-            echo "Error installing amneziawg-tools. Please, install amneziawg-tools manually and run the script again"
-            exit 1
-        fi
-    fi
-    
-    if opkg list-installed | grep -q kmod-amneziawg; then
-        echo "kmod-amneziawg already installed"
-    else
-        KMOD_AMNEZIAWG_FILENAME="kmod-amneziawg${PKGPOSTFIX}"
-        DOWNLOAD_URL="${BASE_URL}v${VERSION}/${KMOD_AMNEZIAWG_FILENAME}"
-        curl -L -o "$AWG_DIR/$KMOD_AMNEZIAWG_FILENAME" "$DOWNLOAD_URL"
-
-        if [ $? -eq 0 ]; then
-            echo "kmod-amneziawg file downloaded successfully"
-        else
-            echo "Error downloading kmod-amneziawg. Please, install kmod-amneziawg manually and run the script again"
-            exit 1
-        fi
-        
-        opkg install "$AWG_DIR/$KMOD_AMNEZIAWG_FILENAME"
-
-        if [ $? -eq 0 ]; then
-            echo "kmod-amneziawg file downloaded successfully"
-        else
-            echo "Error installing kmod-amneziawg. Please, install kmod-amneziawg manually and run the script again"
-            exit 1
-        fi
-    fi
-    
-    if opkg list-installed | grep -q luci-app-amneziawg; then
-        echo "luci-app-amneziawg already installed"
-    else
-        LUCI_APP_AMNEZIAWG_FILENAME="luci-app-amneziawg${PKGPOSTFIX}"
-        DOWNLOAD_URL="${BASE_URL}v${VERSION}/${LUCI_APP_AMNEZIAWG_FILENAME}"
-        curl -L -o "$AWG_DIR/$LUCI_APP_AMNEZIAWG_FILENAME" "$DOWNLOAD_URL"
-
-        if [ $? -eq 0 ]; then
-            echo "luci-app-amneziawg file downloaded successfully"
-        else
-            echo "Error downloading luci-app-amneziawg. Please, install luci-app-amneziawg manually and run the script again"
-            exit 1
+        if ! pkg_install_local "$AWG_DIR/$PACKAGE_FILENAME"; then
+            return 1
         fi
 
-        opkg install "$AWG_DIR/$LUCI_APP_AMNEZIAWG_FILENAME"
+        echo "$package installed successfully"
+        return 0
+    }
 
-        if [ $? -eq 0 ]; then
-            echo "luci-app-amneziawg file downloaded successfully"
-        else
-            echo "Error installing luci-app-amneziawg. Please, install luci-app-amneziawg manually and run the script again"
+    for package in amneziawg-tools kmod-amneziawg; do
+        if pkg_is_installed "$package"; then
+            echo "$package already installed"
+            continue
+        fi
+
+        if ! install_awg_package "$package"; then
+            echo "Error installing $package. Please, install $package manually and run the script again"
             exit 1
         fi
+    done
+
+    if pkg_is_installed luci-proto-amneziawg || pkg_is_installed luci-app-amneziawg; then
+        echo "AmneziaWG LuCI protocol package already installed"
+    elif ! install_awg_package luci-proto-amneziawg && ! install_awg_package luci-app-amneziawg; then
+        echo "Error installing AmneziaWG LuCI protocol package. Please, install it manually and run the script again"
+        exit 1
     fi
 
     rm -rf "$AWG_DIR"
@@ -971,11 +1031,12 @@ printf "\033[34;1mModel: $MODEL\033[0m\n"
 printf "\033[34;1mVersion: $OPENWRT_RELEASE\033[0m\n"
 
 VERSION_ID=$(echo $VERSION | awk -F. '{print $1}')
+set_package_manager
 
-if [ "$VERSION_ID" -ne 23 ] && [ "$VERSION_ID" -ne 24 ]; then
-    printf "\033[31;1mScript only support OpenWrt 23.05 and 24.10\033[0m\n"
+if [ "$VERSION_ID" -ne 23 ] && [ "$VERSION_ID" -ne 24 ] && [ "$VERSION_ID" -ne 25 ]; then
+    printf "\033[31;1mScript supports only OpenWrt 23.05, 24.10 and 25.12\033[0m\n"
     echo "For OpenWrt 21.02 and 22.03 you can:"
-    echo "1) Use ansible https://github.com/itdoginfo/domain-routing-openwrt"
+    echo "1) Use ansible https://github.com/AndrewGDX/domain-routing-openwrt"
     echo "2) Configure manually. Old manual: https://itdog.info/tochechnaya-marshrutizaciya-na-routere-s-openwrt-wireguard-i-dnscrypt/"
     exit 1
 fi

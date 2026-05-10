@@ -22,6 +22,7 @@ start () {
     DOMAINS=https://raw.githubusercontent.com/itdoginfo/allow-domains/main/Ukraine/inside-dnsmasq-ipset.lst
     {% endif %}
     count=0
+    mkdir -p /tmp/dnsmasq.d
     while true; do
         if curl -m 3 github.com; then
             curl -f $DOMAINS --output /tmp/dnsmasq.d/domains.lst

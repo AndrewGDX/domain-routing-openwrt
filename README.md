@@ -1,4 +1,4 @@
-[English role README](https://github.com/itdoginfo/domain-routing-openwrt/blob/master/README.EN.md)
+[English role README](https://github.com/AndrewGDX/domain-routing-openwrt/blob/master/README.EN.md)
 
 # Описание
 Shell скрипт и [роль для Ansible](https://galaxy.ansible.com/ui/standalone/roles/itdoginfo/domain_routing_openwrt). Автоматизируют настройку роутера на OpenWrt для роутинга по доменам и спискам IP-адресов.
@@ -9,12 +9,14 @@ Shell скрипт и [роль для Ansible](https://galaxy.ansible.com/ui/st
 
 # Скрипт для установки
 ```
-sh <(wget -O - https://raw.githubusercontent.com/itdoginfo/domain-routing-openwrt/master/getdomains-install.sh)
+wget -O /tmp/getdomains-install.sh https://raw.githubusercontent.com/AndrewGDX/domain-routing-openwrt/master/getdomains-install.sh
+sh /tmp/getdomains-install.sh
 ```
 
 # Скрипт для удаления
 ```
-sh <(wget -O - https://raw.githubusercontent.com/itdoginfo/domain-routing-openwrt/refs/heads/master/getdomains-uninstall.sh)
+wget -O /tmp/getdomains-uninstall.sh https://raw.githubusercontent.com/AndrewGDX/domain-routing-openwrt/master/getdomains-uninstall.sh
+sh /tmp/getdomains-uninstall.sh
 ```
 
 ## AmneziaWG
@@ -22,34 +24,34 @@ sh <(wget -O - https://raw.githubusercontent.com/itdoginfo/domain-routing-openwr
 
 Если вам нужно установить только AWG, воспользуйтесь скриптом в репозитории: https://github.com/Slava-Shchipunov/awg-openwrt
 
-Если подходящих пакетов нет, перед настройкой необходимо будет самостоятельно [собрать бинарники AmneziaWG](https://github.com/itdoginfo/domain-routing-openwrt/wiki/Amnezia-WG-Build) для своего устройства и установить их.
+Если подходящих пакетов нет, перед настройкой необходимо будет самостоятельно [собрать бинарники AmneziaWG](https://github.com/AndrewGDX/domain-routing-openwrt/wiki/Amnezia-WG-Build) для своего устройства и установить их.
 
 ## Скрипт для проверки конфигурации
-Написан для OpenWrt 23.05 и 22.03. На 21.02 работает только половина проверок.
+Написан для OpenWrt 23.05, 24.10 и 25.12. На 21.02 работает только половина проверок.
 
 [x] - не обязательно означает, что эта часть не работает. Но это повод для ручной проверки.
 
 ### Запуск
 ```
-wget -O - https://raw.githubusercontent.com/itdoginfo/domain-routing-openwrt/master/getdomains-check.sh | sh
+wget -O - https://raw.githubusercontent.com/AndrewGDX/domain-routing-openwrt/master/getdomains-check.sh | sh
 ```
 
 По-умолчанию запускается на русском языке. Если нужно запустить на английском, то после `sh` нужно добавить `-s --lang en`. Аналогично для проверок на подмену DNS и создания дампа.
 
 ```
-wget -O - https://raw.githubusercontent.com/itdoginfo/domain-routing-openwrt/master/getdomains-check.sh | sh -s --lang en
+wget -O - https://raw.githubusercontent.com/AndrewGDX/domain-routing-openwrt/master/getdomains-check.sh | sh -s --lang en
 ```
 
 ### Запустить с проверкой на подмену DNS
 ```
-wget -O - https://raw.githubusercontent.com/itdoginfo/domain-routing-openwrt/master/getdomains-check.sh | sh -s dns
+wget -O - https://raw.githubusercontent.com/AndrewGDX/domain-routing-openwrt/master/getdomains-check.sh | sh -s dns
 ```
 
 ### Запустить с созданием dump
 Все чувствительные переменные затираются.
 
 ```
-wget -O - https://raw.githubusercontent.com/itdoginfo/domain-routing-openwrt/master/getdomains-check.sh | sh -s dump
+wget -O - https://raw.githubusercontent.com/AndrewGDX/domain-routing-openwrt/master/getdomains-check.sh | sh -s dump
 ```
 
 Поиск ошибок вручную: https://habr.com/ru/post/702388/
@@ -129,11 +131,13 @@ service network restart
 service getdomains start
 ```
 
-Тестировалось с
+Тестировалось с Ansible
 - Ansible 2.10.8
 - OpenWrt 21.02.7
 - OpenWrt 22.03.5
 - OpenWrt 23.05.2
+
+Shell-скрипт поддерживает OpenWrt 23.05, 24.10 и 25.12.
 
 ## Выбор туннеля
 - Wireguard настраивается автоматически через переменные
@@ -202,7 +206,9 @@ service getdomains start
 
 При использовании **list_domains** нужен пакет dnsmasq-full.
 
-Для 23.05 dnsmasq-full устанавливается автоматически.
+Для OpenWrt 23.05, 24.10 и 25.12 dnsmasq-full устанавливается автоматически.
+
+Для OpenWrt 25.12 используется пакетный менеджер apk. Для OpenWrt 23.05 и 24.10 используется opkg.
 
 Для OpenWrt 22.03 версия dnsmasq-full должна быть => 2.87, её нет в официальном репозитории, но можно установить из dev репозитория. Если это условие не выполнено, плейбук завершится с ошибкой.
 
